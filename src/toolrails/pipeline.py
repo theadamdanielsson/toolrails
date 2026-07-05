@@ -70,6 +70,7 @@ async def _repair_call(
     messages: list[dict[str, Any]],
     tools: list[dict[str, Any]],
     names: list[str],
+    idx: int = 0,
 ) -> dict[str, Any] | None:
     """Return a guaranteed-valid version of one attempted tool call.
 
@@ -86,7 +87,7 @@ async def _repair_call(
         logger.info("name %r → %r", raw_name, name)
 
     schema = schemas.schema_for(tools, name)
-    call_id = call.get("id") or f"call_{name}"
+    call_id = call.get("id") or f"call_{name}_{idx}"
     args = schemas.parse_arguments(fn.get("arguments"))
 
     # Fast path: the model already got it right. No second call.
@@ -103,17 +104,22 @@ async def _repair_call(
             logger.info("call %s coerced (fixed argument types)", name)
             return _as_openai_call(name, coerced, call_id)
 
-    # Last resort: regenerate arguments under the grammar. Guaranteed to match
-    # the schema, at the cost of one more generation.
-    logger.info("call %s regenerated under grammar", name)
+    # Last resort: regenerate arguments under the grammar, then re-check. The
+    # grammar enforces structure, types, required fields and enums — but not
+    # every JSON-Schema keyword (minimum, pattern, minItems…), and the model can
+    # return nothing usable. So we validate the result, and if it still doesn't
+    # satisfy the schema we fail open: hand back the model's own call rather than
+    # a different, still-invalid one.
+    logger.info("call %s regenerating under grammar", name)
     regen = await up.constrained_object(
         model,
         messages + [_nudge(name, schemas.describe(tools, name))],
         schema,
     )
-    if regen is None:
-        regen = args if args is not None else {}
-    return _as_openai_call(name, regen, call_id)
+    if regen is not None and schemas.args_valid(regen, schema):
+        return _as_openai_call(name, regen, call_id)
+    logger.warning("call %s could not be repaired — passing the model's own call through", name)
+    return call
 
 
 async def _pick_tool(
@@ -152,8 +158,13 @@ async def _force_call(
     args = await up.constrained_object(
         model, messages + [_nudge(name, schemas.describe(tools, name))], schema
     )
+    if args is None or not schemas.args_valid(args, schema):
+        # A forced call has no valid original to fall back to; this is the best
+        # the grammar could do. Don't pretend it's guaranteed.
+        logger.warning("forced call %s: could not produce schema-valid arguments", name)
+        args = args or {}
     message["content"] = None
-    message["tool_calls"] = [_as_openai_call(name, args or {}, f"call_{name}")]
+    message["tool_calls"] = [_as_openai_call(name, args, f"call_{name}")]
     choice["finish_reason"] = "tool_calls"
 
 
@@ -189,8 +200,8 @@ async def handle(body: dict[str, Any], up: Upstream) -> dict[str, Any]:
     calls = message.get("tool_calls")
     if calls:
         repaired = []
-        for call in calls:
-            fixed = await _repair_call(call, up, model, messages, tools, names)
+        for i, call in enumerate(calls):
+            fixed = await _repair_call(call, up, model, messages, tools, names, i)
             repaired.append(fixed if fixed is not None else call)
         message["tool_calls"] = repaired
         return resp

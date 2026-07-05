@@ -159,6 +159,27 @@ async def test_required_forces_a_call_from_prose():
     assert up.constrained_calls == 1  # single tool -> no selection call, one args call
 
 
+async def test_unrepairable_call_fails_open_to_original():
+    # Missing a required field (coercion can't invent it) and grammar regen
+    # returns nothing usable -> hand back the model's own call, never fabricate.
+    up = FakeUpstream(with_call("get_weather", '{"units": "c"}'), constrained_result=None)
+    out = await handle(body(tools=[WEATHER]), up)
+    fn = only_call(out)
+    assert fn["name"] == "get_weather"
+    assert json.loads(fn["arguments"]) == {"units": "c"}
+    assert up.constrained_calls == 1  # it tried regen, then failed open
+
+
+async def test_regenerated_call_is_revalidated_before_returning():
+    # If regen produces something that still doesn't validate, don't present it.
+    up = FakeUpstream(with_call("get_weather", '{"units": "c"}'),
+                      constrained_result={"still": "wrong"})
+    out = await handle(body(tools=[WEATHER]), up)
+    fn = only_call(out)
+    # Falls open to the model's original call rather than the invalid regen.
+    assert json.loads(fn["arguments"]) == {"units": "c"}
+
+
 async def test_auto_prose_answer_is_left_alone():
     up = FakeUpstream(prose("here is a plain answer"))
     out = await handle(body(tools=[WEATHER]), up)

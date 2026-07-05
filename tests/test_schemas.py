@@ -43,6 +43,25 @@ def test_nearest_name_snaps_close_misspelling():
     assert schemas.nearest_name("send_email", names) is None
 
 
+def test_nearest_name_refuses_opposite_verb():
+    # Lexically near, semantically opposite — must NOT snap across.
+    assert schemas.nearest_name("create_file", ["delete_file", "list_files"]) is None
+    assert schemas.nearest_name("get_weather", ["set_weather"]) is None
+    assert schemas.nearest_name("enable_user", ["disable_user"]) is None
+    assert schemas.nearest_name("start_server", ["stop_server"]) is None
+
+
+def test_nearest_name_still_snaps_casing_and_separators():
+    assert schemas.nearest_name("getWeather", ["get_weather"]) == "get_weather"
+    assert schemas.nearest_name("get-weather", ["get_weather"]) == "get_weather"
+    assert schemas.nearest_name("GetWeather", ["get_weather"]) == "get_weather"
+
+
+def test_coerce_handles_nullable_type_list():
+    schema = {"type": "object", "properties": {"n": {"type": ["integer", "null"]}}}
+    assert schemas.coerce({"n": "30"}, schema) == {"n": 30}
+
+
 def test_parse_arguments_strict_and_dict():
     assert schemas.parse_arguments('{"city": "Oslo"}') == {"city": "Oslo"}
     assert schemas.parse_arguments({"city": "Oslo"}) == {"city": "Oslo"}

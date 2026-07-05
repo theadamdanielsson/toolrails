@@ -2,6 +2,10 @@
 
 **Valid tool calls from any local model.**
 
+[![CI](https://github.com/theadamdanielsson/toolrails/actions/workflows/ci.yml/badge.svg)](https://github.com/theadamdanielsson/toolrails/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/toolrails)](https://pypi.org/project/toolrails/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+
 Local models are good enough to code with now — until they try to call a tool.
 A small model on Ollama will decide to call `read_file` and then hand your agent
 the arguments as a *string* instead of an object, or an array field serialized
@@ -47,14 +51,18 @@ resp = client.chat.completions.create(
 ## The difference, measured
 
 A benchmark ships in the repo (`demo/reliability.py`): the same tool-calling
-request, twelve times, against raw Ollama and through toolrails, using a
+request, many times, against raw Ollama and through toolrails, using a
 realistically complex tool — typed fields and a nested array of objects, the way
 a real coding agent's tools actually look.
 
 | endpoint | model | valid tool calls |
 | --- | --- | --- |
-| raw Ollama | llama3.2:3b | **0 / 12** |
-| via toolrails | llama3.2:3b | **12 / 12** |
+| raw Ollama | llama3.2:3b | ~1 in 20 |
+| via toolrails | llama3.2:3b | ~19–20 in 20 |
+
+Run it yourself: `python demo/reliability.py --model llama3.2:3b`. Small models
+are stochastic, so the exact count moves run to run — raw lands in the single
+digits, toolrails in the high nineties.
 
 The model isn't stupid — it gets the *values* right and the *types* wrong. Raw,
 it hands your agent this (note the integer-as-string and the two stringified
@@ -76,24 +84,29 @@ model:
  "reminders": [{"method": "email", "minutes_before": 10}]}
 ```
 
-Correct types, real nested arrays, every time. Simpler flat tools fail far less
-often raw — the gap is widest exactly where real agent tools live: structured,
-typed, nested.
+Correct types, real nested arrays. This is model-dependent, and honestly so: a
+model that's already good at typed tool calls — qwen2.5:3b lands ~19/20 raw —
+sails straight through toolrails untouched, because it only does work when the
+model needs it. The gap is widest on the models that struggle, on exactly the
+structured, typed, nested tools real agents use.
 
-## What it guarantees
+## What it does
 
-- **The tool name is real.** A hallucinated `getWeather` is snapped to the
-  `get_weather` you actually offered; a name that matches nothing is left alone
-  rather than guessed at.
-- **The arguments parse and fit the schema.** When the model's arguments don't
-  validate, toolrails first fixes the *types* of its own values — the array it
-  sent as a string, the integer it quoted — and only if that still can't satisfy
-  the schema does it regenerate them under a grammar built from the tool's
-  schema. Either way, the call you receive validates.
-- **`tool_choice` works again.** Ollama's OpenAI-compatible endpoint silently
-  ignores `tool_choice`. toolrails restores it: `"none"` strips the tools,
+- **Fixes the tool name.** A `getWeather` or `get-weather` typo is snapped to the
+  `get_weather` you actually offered. It will *not* snap across tools — a
+  `create_file` that half-matches `delete_file` is left alone, never quietly
+  redirected to a different, real tool.
+- **Fixes the arguments.** When the model's arguments don't validate, toolrails
+  first coerces the *types* of its own values — the array it sent as a string,
+  the integer it quoted — and only if that can't satisfy the schema does it
+  regenerate them under a grammar built from the tool's schema. What you get back
+  is either a call that validates or, if even regeneration can't produce one, the
+  model's own call untouched — never a fabricated one dressed up as valid.
+- **Restores `tool_choice`.** Ollama's OpenAI-compatible endpoint silently
+  ignores `tool_choice`. toolrails honours it: `"none"` strips the tools,
   `"required"` (or a named function) forces a call even when the model tried to
-  answer in prose.
+  answer in prose. (A forced call is best-effort — if the model gives nothing the
+  grammar can shape into valid arguments, you'll see a logged warning.)
 
 ## It never breaks your agent
 
@@ -120,13 +133,19 @@ which tool to call, and then repairs the result in the cheapest way that works:
    the model meant.
 3. **If coercion still can't satisfy the schema**, toolrails regenerates the
    arguments with the tool's JSON schema in Ollama's `format` parameter. Ollama
-   compiles that schema to a grammar (XGrammar) and constrains decoding token by
-   token, so the arguments come back well-formed by construction.
+   compiles that schema to a grammar (built on llama.cpp's GBNF grammar sampling)
+   and constrains decoding token by token, so the arguments come back matching
+   the schema's structure, types, required fields and enums. toolrails then
+   re-checks the result with `jsonschema` — a grammar enforces structure but not
+   every keyword (`minimum`, `pattern`, `minItems`…) — and if it *still* doesn't
+   validate, falls back to the model's own call rather than pass off an invalid
+   one.
 
 Names are repaired by deterministic string matching, arguments checked with
 `jsonschema`. There is no second model judging the first — just coercion, a
-grammar, and a validator. And if every step somehow fails, the model's original
-answer passes through untouched.
+grammar, and a validator. The [constraint-tax paper](https://arxiv.org/abs/2606.25605)
+is cited for the problem it documents (constraints on the tool *decision*
+suppress tool calls), not as an endorsement of this design.
 
 ## Install
 
@@ -173,7 +192,7 @@ benchmark against your own models.
 
 ## From the same author
 
-toolrails is by the author of [overloop](https://github.com/theadamdanielsson/overloop)
+toolrails is by the author of [overloop](https://pypi.org/project/overloop/)
 (*stop your agent looping*) and [overllm](https://github.com/theadamdanielsson/overllm)
 (*catch the LLM calls you didn't need*). Same theme, one layer down: those stop
 wasted agent work; this stops the wasted work of a tool call that never parses.

@@ -4,8 +4,8 @@ Runs the same tool-requiring prompt N times against each endpoint and classifies
 every response — did the model produce a call with a real name and arguments that
 match the tool's JSON schema? Prints a rate table and sample failures.
 
-    python demo/reliability.py                 # defaults: gemma3:4b, 12 trials
-    python demo/reliability.py --model llama3.2:3b --trials 20
+    python demo/reliability.py                 # defaults: llama3.2:3b, 12 trials
+    python demo/reliability.py --model qwen2.5:3b --trials 20
 
 Requires Ollama on :11434 and toolrails on :11500 (uvx toolrails).
 """
@@ -111,7 +111,7 @@ def report(label: str, results: list[tuple[str, str]]) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--model", default="gemma3:4b")
+    ap.add_argument("--model", default="llama3.2:3b")
     ap.add_argument("--trials", type=int, default=12)
     ap.add_argument("--ollama", default="http://localhost:11434/v1/chat/completions")
     ap.add_argument("--toolrails", default="http://localhost:11500/v1/chat/completions")

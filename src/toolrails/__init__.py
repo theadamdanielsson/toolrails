@@ -6,4 +6,4 @@ the tool's JSON schema. It also restores `tool_choice`, which Ollama's
 OpenAI-compatible endpoint silently ignores.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"

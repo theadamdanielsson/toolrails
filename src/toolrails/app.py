@@ -35,6 +35,8 @@ def create_app(ollama_url: str) -> Starlette:
             body: dict[str, Any] = await request.json()
         except (json.JSONDecodeError, ValueError):
             return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+        if not isinstance(body, dict):
+            return JSONResponse({"error": "body must be a JSON object"}, status_code=400)
 
         wants_stream = bool(body.get("stream"))
         has_tools = bool(body.get("tools"))
@@ -96,6 +98,15 @@ async def _forward(up: Upstream, body: dict[str, Any], wants_stream: bool) -> Re
             async with up._client.stream(  # noqa: SLF001 - deliberate reuse
                 "POST", f"{up.base_url}/v1/chat/completions", json=body
             ) as r:
+                if r.status_code >= 400:
+                    # Don't stream a raw error blob as if it were SSE; emit the
+                    # upstream error as one well-formed event.
+                    detail = (await r.aread()).decode("utf-8", "replace")[:500]
+                    err = {"error": {"message": detail, "type": "upstream_error",
+                                     "code": r.status_code}}
+                    yield f"data: {json.dumps(err)}\n\n".encode()
+                    yield b"data: [DONE]\n\n"
+                    return
                 async for chunk in r.aiter_raw():
                     yield chunk
         return StreamingResponse(gen(), media_type="text/event-stream")
@@ -143,12 +154,15 @@ def _as_sse(result: dict[str, Any]):
 
     for i, call in enumerate(message.get("tool_calls") or []):
         fn = call.get("function", {})
+        raw_args = fn.get("arguments", "")
+        if not isinstance(raw_args, str):  # a leftover call may carry a dict
+            raw_args = json.dumps(raw_args)
         yield emit({"tool_calls": [{
             "index": i, "id": call.get("id", f"call_{i}"), "type": "function",
             "function": {"name": fn.get("name", ""), "arguments": ""},
         }]})
         yield emit({"tool_calls": [{
-            "index": i, "function": {"arguments": fn.get("arguments", "")},
+            "index": i, "function": {"arguments": raw_args},
         }]})
 
     yield emit({}, finish=choice.get("finish_reason", "stop"))
