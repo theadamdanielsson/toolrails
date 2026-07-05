@@ -108,11 +108,15 @@ async def _forward(up: Upstream, body: dict[str, Any], wants_stream: bool) -> Re
 
 
 def _as_sse(result: dict[str, Any]):
-    """Re-emit a completed response as a single OpenAI streaming chunk.
+    """Re-emit a completed response as an OpenAI streaming sequence.
 
-    v1 keeps this deliberately simple: one delta carrying the full message,
-    then [DONE]. Token-by-token streaming under the grammar is a later concern;
-    correctness of the call comes first.
+    The repaired response is already whole, so we replay it in the shape clients
+    actually accumulate: a role delta, then content, then for each tool call an
+    opener delta (index, id, type, name) followed by its arguments, then a final
+    delta carrying finish_reason, then [DONE]. Each tool call carries its
+    `index`, which is what strict clients key on — the piece the old single-chunk
+    form omitted. Real token-by-token streaming under the grammar is still a
+    later refinement; this makes the buffered form protocol-correct.
     """
     try:
         choice = result["choices"][0]
@@ -121,22 +125,31 @@ def _as_sse(result: dict[str, Any]):
         yield b"data: [DONE]\n\n"
         return
 
-    chunk = {
+    base = {
         "id": result.get("id", f"chatcmpl-{int(time.time())}"),
         "object": "chat.completion.chunk",
         "created": result.get("created", int(time.time())),
         "model": result.get("model", ""),
-        "choices": [
-            {
-                "index": 0,
-                "delta": {
-                    "role": "assistant",
-                    "content": message.get("content"),
-                    "tool_calls": message.get("tool_calls"),
-                },
-                "finish_reason": choice.get("finish_reason", "stop"),
-            }
-        ],
     }
-    yield f"data: {json.dumps(chunk)}\n\n".encode()
+
+    def emit(delta: dict[str, Any], finish: str | None = None) -> bytes:
+        chunk = {**base, "choices": [{"index": 0, "delta": delta, "finish_reason": finish}]}
+        return f"data: {json.dumps(chunk)}\n\n".encode()
+
+    yield emit({"role": "assistant"})
+
+    if message.get("content"):
+        yield emit({"content": message["content"]})
+
+    for i, call in enumerate(message.get("tool_calls") or []):
+        fn = call.get("function", {})
+        yield emit({"tool_calls": [{
+            "index": i, "id": call.get("id", f"call_{i}"), "type": "function",
+            "function": {"name": fn.get("name", ""), "arguments": ""},
+        }]})
+        yield emit({"tool_calls": [{
+            "index": i, "function": {"arguments": fn.get("arguments", "")},
+        }]})
+
+    yield emit({}, finish=choice.get("finish_reason", "stop"))
     yield b"data: [DONE]\n\n"

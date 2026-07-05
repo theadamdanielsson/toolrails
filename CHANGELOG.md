@@ -12,16 +12,21 @@ First release.
 
 - An OpenAI-compatible proxy over Ollama that guarantees well-formed tool calls:
   a real tool name and arguments that match the tool's JSON schema.
-- Two-stage repair: the model decides which tool to call unconstrained, then its
-  arguments are regenerated under a grammar built from the tool's schema
-  (Ollama's `format`), so they cannot come back malformed.
+- A repair ladder that never constrains the model's decision to call a tool
+  (which suppresses tool calls — the "constraint tax"): a valid call passes
+  through untouched; type errors (a stringified array, a quoted integer) are
+  fixed by coercing the model's own values with no second model call; and only
+  if coercion can't satisfy the schema are the arguments regenerated under a
+  grammar built from it (Ollama's `format`).
 - `tool_choice` support, which Ollama's OpenAI endpoint ignores — `none` strips
   the tools, `required` and a named function force a call.
 - Hallucinated tool names snapped to the nearest offered tool; unknown names left
   untouched.
 - Fail-open behaviour: any error, or an upstream rejection, is passed through
   unchanged rather than turned into a proxy error.
-- Streaming support for tool-calling requests (repaired, then re-emitted).
+- Streaming support for tool-calling requests: the repaired response is
+  re-emitted as standard incremental deltas (each tool call carrying its
+  `index`), verified against the OpenAI SDK's streaming client.
 - `demo/reliability.py`, a benchmark that measures valid-tool-call rate raw
   versus through toolrails.
 - Per-call logging, silenced with `--quiet`.

@@ -64,6 +64,60 @@ def test_parse_arguments_gives_up_cleanly():
     assert schemas.parse_arguments("not json at all") is None
 
 
+def test_coerce_fixes_quoted_int_and_stringified_array():
+    schema = {
+        "type": "object",
+        "properties": {
+            "duration_minutes": {"type": "integer"},
+            "attendees": {"type": "array", "items": {"type": "string"}},
+        },
+    }
+    raw = {"duration_minutes": "30", "attendees": '["a@x.com", "b@x.com"]'}
+    coerced = schemas.coerce(raw, schema)
+    assert coerced == {"duration_minutes": 30, "attendees": ["a@x.com", "b@x.com"]}
+    assert schemas.args_valid(coerced, schema)
+
+
+def test_coerce_recurses_into_stringified_nested_objects():
+    schema = {
+        "type": "object",
+        "properties": {
+            "reminders": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "method": {"type": "string"},
+                        "minutes_before": {"type": "integer"},
+                    },
+                },
+            }
+        },
+    }
+    raw = {"reminders": '[{"method": "email", "minutes_before": "10"}]'}
+    coerced = schemas.coerce(raw, schema)
+    assert coerced == {"reminders": [{"method": "email", "minutes_before": 10}]}
+
+
+def test_coerce_handles_booleans_and_leaves_strings_alone():
+    schema = {"type": "object", "properties": {
+        "flag": {"type": "boolean"}, "name": {"type": "string"}}}
+    assert schemas.coerce({"flag": "true", "name": "Oslo"}, schema) == {"flag": True, "name": "Oslo"}
+
+
+def test_coerce_never_invents_a_missing_value():
+    # A required field the model omitted stays omitted — coercion only reshapes.
+    schema = schemas.schema_for(TOOLS, "get_weather")
+    assert schemas.coerce({"units": "c"}, schema) == {"units": "c"}
+    assert schemas.args_valid(schemas.coerce({"units": "c"}, schema), schema) is False
+
+
+def test_coerce_leaves_unconvertible_values_for_validation():
+    schema = {"type": "object", "properties": {"n": {"type": "integer"}}}
+    # "abc" can't become an int; left as-is so validation still fails cleanly.
+    assert schemas.coerce({"n": "abc"}, schema) == {"n": "abc"}
+
+
 def test_args_valid_against_schema():
     schema = schemas.schema_for(TOOLS, "get_weather")
     assert schemas.args_valid({"city": "Oslo"}, schema) is True

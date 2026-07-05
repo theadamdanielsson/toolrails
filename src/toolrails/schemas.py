@@ -124,6 +124,79 @@ def parse_arguments(raw: Any) -> dict[str, Any] | None:
         return None
 
 
+def coerce(value: Any, schema: dict[str, Any]) -> Any:
+    """Nudge the model's own value toward the schema's type without inventing
+    anything. This fixes the failure we actually see from small models — the
+    right value with the wrong type: an integer sent as `"30"`, an array or
+    object serialized into a `"[...]"` string, a boolean as `"true"`. It walks
+    the schema recursively and only ever *reshapes* values it already has; it
+    never fills in a missing one. Anything it can't confidently convert is left
+    untouched for validation (and, failing that, grammar regeneration) to catch.
+    """
+    if not isinstance(schema, dict):
+        return value
+    t = schema.get("type")
+    if isinstance(t, list):  # e.g. ["string", "null"] — too ambiguous to coerce
+        return value
+
+    # A structured value the model flattened into a JSON string ("[...]", "{...}").
+    if t in ("object", "array") and isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (json.JSONDecodeError, ValueError):
+            return value
+
+    if t == "integer":
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float) and value.is_integer():
+            return int(value)
+        if isinstance(value, str):
+            try:
+                return int(value.strip())
+            except ValueError:
+                try:
+                    f = float(value.strip())
+                    return int(f) if f.is_integer() else value
+                except ValueError:
+                    return value
+        return value
+
+    if t == "number":
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return value
+        if isinstance(value, str):
+            try:
+                return float(value.strip())
+            except ValueError:
+                return value
+        return value
+
+    if t == "boolean":
+        if isinstance(value, str):
+            low = value.strip().lower()
+            if low in ("true", "yes", "1"):
+                return True
+            if low in ("false", "no", "0"):
+                return False
+        return value
+
+    if t == "array" and isinstance(value, list):
+        items = schema.get("items")
+        return [coerce(v, items) for v in value] if isinstance(items, dict) else value
+
+    if isinstance(value, dict):  # object, or a schema with properties but no type
+        props = schema.get("properties")
+        if isinstance(props, dict):
+            return {k: (coerce(v, props[k]) if k in props else v) for k, v in value.items()}
+
+    return value
+
+
 def args_valid(args: dict[str, Any], schema: dict[str, Any]) -> bool:
     """True if `args` satisfies the tool's parameter schema.
 

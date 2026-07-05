@@ -88,9 +88,20 @@ async def test_fast_path_spends_no_second_call():
     assert up.constrained_calls == 0  # already valid — no grammar pass
 
 
-async def test_invalid_arguments_are_regenerated():
-    # city as an int violates the schema -> constrained regeneration kicks in.
-    up = FakeUpstream(with_call("get_weather", '{"city": 123}'),
+async def test_type_errors_are_coerced_without_a_model_call():
+    # The common small-model failure: right values, wrong types. Coercion fixes
+    # it in place — no second generation, and the values are preserved.
+    up = FakeUpstream(with_call("create_event",
+                                '{"title": "Q3", "duration_minutes": "45"}'))
+    out = await handle(body(tools=[EVENT]), up)
+    assert up.constrained_calls == 0
+    args = json.loads(only_call(out)["arguments"])
+    assert args == {"title": "Q3", "duration_minutes": 45}
+
+
+async def test_uncoercible_arguments_are_regenerated():
+    # A missing required field can't be coerced into existence -> grammar regen.
+    up = FakeUpstream(with_call("get_weather", '{"units": "c"}'),
                       constrained_result={"city": "Oslo"})
     out = await handle(body(tools=[WEATHER]), up)
     assert up.constrained_calls == 1

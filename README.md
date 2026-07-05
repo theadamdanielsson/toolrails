@@ -85,10 +85,11 @@ typed, nested.
 - **The tool name is real.** A hallucinated `getWeather` is snapped to the
   `get_weather` you actually offered; a name that matches nothing is left alone
   rather than guessed at.
-- **The arguments parse and fit the schema.** When the model's own arguments
-  don't validate, toolrails regenerates *just the arguments* under a grammar
-  built from the tool's JSON schema, so the output is structurally incapable of
-  being malformed JSON or missing a required field.
+- **The arguments parse and fit the schema.** When the model's arguments don't
+  validate, toolrails first fixes the *types* of its own values — the array it
+  sent as a string, the integer it quoted — and only if that still can't satisfy
+  the schema does it regenerate them under a grammar built from the tool's
+  schema. Either way, the call you receive validates.
 - **`tool_choice` works again.** Ollama's OpenAI-compatible endpoint silently
   ignores `tool_choice`. toolrails restores it: `"none"` strips the tools,
   `"required"` (or a named function) forces a call even when the model tried to
@@ -108,20 +109,24 @@ calls: the fast path recognises a good call and passes it straight through.
 The naive fix — force every response through the tool's grammar — backfires.
 Constraining the *decision* to call a tool is what makes models stop calling
 tools at all; there's a measured "constraint tax" for exactly this
-([arXiv:2606.25605](https://arxiv.org/abs/2606.25605)). So toolrails splits the
-job in two, the way that paper recommends:
+([arXiv:2606.25605](https://arxiv.org/abs/2606.25605)). So toolrails never
+touches the decision. It asks Ollama normally, lets the model choose whether and
+which tool to call, and then repairs the result in the cheapest way that works:
 
-1. **Decide, unconstrained.** Ask Ollama normally. Whether and which tool to
-   call is entirely the model's choice — no grammar, no tax. If the call it
-   produces is already valid, we're done.
-2. **Serialize, constrained.** Only once a tool is chosen do we regenerate its
-   arguments, this time with the tool's JSON schema in Ollama's `format`
-   parameter. Ollama compiles that schema to a grammar (XGrammar) and constrains
-   decoding token by token, so the arguments *cannot* come out malformed.
+1. **If the call already validates, it passes straight through** — no extra work.
+2. **If only the types are wrong** — the array the model sent as a string, the
+   integer it quoted — toolrails coerces the model's *own* values to the schema.
+   This is the common case; it costs no second model call and never changes what
+   the model meant.
+3. **If coercion still can't satisfy the schema**, toolrails regenerates the
+   arguments with the tool's JSON schema in Ollama's `format` parameter. Ollama
+   compiles that schema to a grammar (XGrammar) and constrains decoding token by
+   token, so the arguments come back well-formed by construction.
 
-Name repair is deterministic string matching; argument validation is
-`jsonschema`. There is no second model judging the first — just a grammar and a
-validator.
+Names are repaired by deterministic string matching, arguments checked with
+`jsonschema`. There is no second model judging the first — just coercion, a
+grammar, and a validator. And if every step somehow fails, the model's original
+answer passes through untouched.
 
 ## Install
 
@@ -155,8 +160,9 @@ repairs models that *attempt* tool calls; a model Ollama rejects outright with
 v1 — forcing tool calls onto those is a bigger, separate job.
 
 Streaming requests are supported: with tools, the response is repaired and then
-re-emitted as a stream. Token-by-token streaming under the grammar is a later
-refinement — v1 gets the call right first.
+re-emitted as standard incremental deltas (verified against the OpenAI SDK's
+streaming client). The repair still buffers internally rather than streaming the
+model token by token — that's a later refinement; v1 gets the call right first.
 
 ## Contributing
 

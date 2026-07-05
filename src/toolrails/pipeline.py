@@ -86,15 +86,26 @@ async def _repair_call(
         logger.info("name %r → %r", raw_name, name)
 
     schema = schemas.schema_for(tools, name)
+    call_id = call.get("id") or f"call_{name}"
     args = schemas.parse_arguments(fn.get("arguments"))
 
     # Fast path: the model already got it right. No second call.
     if args is not None and schemas.args_valid(args, schema):
         logger.info("call %s ok", name)
-        return _as_openai_call(name, args, call.get("id") or f"call_{name}")
+        return _as_openai_call(name, args, call_id)
 
-    # Slow path: regenerate arguments under the grammar.
-    logger.info("call %s repaired (arguments did not match schema)", name)
+    # Surgical path: fix the *types* of the model's own values (the common
+    # small-model failure) without a second model call and without changing what
+    # the model meant.
+    if args is not None:
+        coerced = schemas.coerce(args, schema)
+        if schemas.args_valid(coerced, schema):
+            logger.info("call %s coerced (fixed argument types)", name)
+            return _as_openai_call(name, coerced, call_id)
+
+    # Last resort: regenerate arguments under the grammar. Guaranteed to match
+    # the schema, at the cost of one more generation.
+    logger.info("call %s regenerated under grammar", name)
     regen = await up.constrained_object(
         model,
         messages + [_nudge(name, schemas.describe(tools, name))],
@@ -102,7 +113,7 @@ async def _repair_call(
     )
     if regen is None:
         regen = args if args is not None else {}
-    return _as_openai_call(name, regen, call.get("id") or f"call_{name}")
+    return _as_openai_call(name, regen, call_id)
 
 
 async def _pick_tool(
