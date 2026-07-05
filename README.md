@@ -2,12 +2,6 @@
 
 **Valid tool calls from any local model.**
 
-<!-- TODO: before/after GIF goes here — the whole pitch.
-     Left: llama3.2:3b on Ollama handing back a tool call with stringified
-     arrays and an integer-as-string, agent stuck in an "Invalid tool
-     parameters" retry loop. Right: same model through toolrails, correct types
-     on the first try. Capture notes in demo/README.md. -->
-
 Local models are good enough to code with now — until they try to call a tool.
 A small model on Ollama will decide to call `read_file` and then hand your agent
 the arguments as a *string* instead of an object, or an array field serialized
@@ -31,6 +25,24 @@ uvx toolrails --ollama http://localhost:11434
 ```
 
 That's the whole change. One base URL.
+
+## Point your agent at it
+
+toolrails speaks the OpenAI API, so anything that lets you set a base URL works —
+Cline, opencode, the OpenAI SDKs, your own scripts. Point the base URL at
+`http://localhost:11500/v1` and keep using your Ollama model name. The API key is
+ignored, so pass any placeholder.
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:11500/v1", api_key="ollama")
+resp = client.chat.completions.create(
+    model="llama3.2:3b",
+    messages=[{"role": "user", "content": "weather in Oslo?"}],
+    tools=[...],
+)
+```
 
 ## The difference, measured
 
@@ -113,13 +125,22 @@ validator.
 
 ## Install
 
+You need [Ollama](https://ollama.com) running and Python 3.10 or newer.
+
 ```bash
 uvx toolrails                 # run without installing
 pip install toolrails         # or install the CLI
 toolrails --ollama http://localhost:11434 --port 11500
 ```
 
-Options: `--ollama` (Ollama base URL, or `$OLLAMA_HOST`), `--host`, `--port`.
+Options: `--ollama` (Ollama base URL, or `$OLLAMA_HOST`), `--host`, `--port`,
+`--quiet` (stop logging a line per repaired call). It prints one line whenever it
+steps in, so you can see it working:
+
+```
+toolrails: call create_event repaired (arguments did not match schema)
+toolrails: forced call get_weather (tool_choice names it)
+```
 
 ## Scope
 
@@ -136,6 +157,13 @@ v1 — forcing tool calls onto those is a bigger, separate job.
 Streaming requests are supported: with tools, the response is repaired and then
 re-emitted as a stream. Token-by-token streaming under the grammar is a later
 refinement — v1 gets the call right first.
+
+## Contributing
+
+The most useful thing you can send is a tool call that came out wrong: the model,
+the tool schema you gave it, and what it produced. That is the test set. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for how to run the tests and the reliability
+benchmark against your own models.
 
 ## From the same author
 
