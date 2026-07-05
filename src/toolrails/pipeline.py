@@ -23,10 +23,13 @@ never wedge the agent using it.
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
 from . import schemas
 from .upstream import Upstream
+
+logger = logging.getLogger("toolrails")
 
 
 def _nudge(name: str, description: str) -> dict[str, str]:
@@ -77,16 +80,21 @@ async def _repair_call(
     raw_name = fn.get("name") or ""
     name = schemas.nearest_name(raw_name, names)
     if name is None:
+        logger.warning("unknown tool %r left untouched", raw_name)
         return None
+    if name != raw_name:
+        logger.info("name %r → %r", raw_name, name)
 
     schema = schemas.schema_for(tools, name)
     args = schemas.parse_arguments(fn.get("arguments"))
 
     # Fast path: the model already got it right. No second call.
     if args is not None and schemas.args_valid(args, schema):
+        logger.info("call %s ok", name)
         return _as_openai_call(name, args, call.get("id") or f"call_{name}")
 
     # Slow path: regenerate arguments under the grammar.
+    logger.info("call %s repaired (arguments did not match schema)", name)
     regen = await up.constrained_object(
         model,
         messages + [_nudge(name, schemas.describe(tools, name))],
@@ -118,6 +126,26 @@ async def _pick_tool(
     return chosen if chosen in names else names[0]
 
 
+async def _force_call(
+    up: Upstream,
+    model: str,
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]],
+    name: str,
+    message: dict[str, Any],
+    choice: dict[str, Any],
+) -> None:
+    """Rewrite `message` in place to be exactly one guaranteed-valid call to
+    `name` — the arguments regenerated under that tool's grammar."""
+    schema = schemas.schema_for(tools, name)
+    args = await up.constrained_object(
+        model, messages + [_nudge(name, schemas.describe(tools, name))], schema
+    )
+    message["content"] = None
+    message["tool_calls"] = [_as_openai_call(name, args or {}, f"call_{name}")]
+    choice["finish_reason"] = "tool_calls"
+
+
 async def handle(body: dict[str, Any], up: Upstream) -> dict[str, Any]:
     """Run the pipeline for one (non-streaming) chat-completions request."""
     tools = body.get("tools") or []
@@ -139,6 +167,14 @@ async def handle(body: dict[str, Any], up: Upstream) -> dict[str, Any]:
     except (KeyError, IndexError):
         return resp  # unfamiliar shape — hand it back untouched
 
+    # A specific tool_choice wins over whatever stage-1 decided to do — even if
+    # the model chose a different tool or answered in prose, honour the request.
+    forced = _forced_name(tool_choice, names)
+    if forced:
+        logger.info("forced call %s (tool_choice names it)", forced)
+        await _force_call(up, model, messages, tools, forced, message, choice)
+        return resp
+
     calls = message.get("tool_calls")
     if calls:
         repaired = []
@@ -148,17 +184,11 @@ async def handle(body: dict[str, Any], up: Upstream) -> dict[str, Any]:
         message["tool_calls"] = repaired
         return resp
 
-    # The model answered in prose. Force a call only if asked to.
-    forced = _forced_name(tool_choice, names)
-    if forced or tool_choice == "required":
-        name = forced or await _pick_tool(up, model, messages, names)
-        schema = schemas.schema_for(tools, name)
-        args = await up.constrained_object(
-            model, messages + [_nudge(name, schemas.describe(tools, name))], schema
-        )
-        message["content"] = None
-        message["tool_calls"] = [_as_openai_call(name, args or {}, f"call_{name}")]
-        choice["finish_reason"] = "tool_calls"
+    # The model answered in prose. Force a call only if tool_choice demanded one.
+    if tool_choice == "required":
+        name = await _pick_tool(up, model, messages, names)
+        logger.info("forced call %s (tool_choice=required)", name)
+        await _force_call(up, model, messages, tools, name, message, choice)
         return resp
 
     # `auto` with a prose answer is a legitimate outcome — leave it alone.

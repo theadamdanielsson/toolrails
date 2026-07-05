@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 
 from . import __version__
@@ -25,8 +26,19 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--port", type=int, default=11500, help="Port to listen on (default: %(default)s)."
     )
+    parser.add_argument(
+        "--quiet", action="store_true", help="Don't log a line per repaired call."
+    )
     parser.add_argument("--version", action="version", version=f"toolrails {__version__}")
     args = parser.parse_args(argv)
+
+    logging.basicConfig(
+        level=logging.WARNING if args.quiet else logging.INFO,
+        format="toolrails: %(message)s",
+    )
+    # Only our own per-call lines; the HTTP client's request chatter stays quiet.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
 
     import uvicorn
 

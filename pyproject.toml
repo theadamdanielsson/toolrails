@@ -40,3 +40,4 @@ packages = ["src/toolrails"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+asyncio_mode = "auto"
