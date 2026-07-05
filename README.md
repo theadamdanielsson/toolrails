@@ -3,17 +3,19 @@
 **Valid tool calls from any local model.**
 
 <!-- TODO: before/after GIF goes here — the whole pitch.
-     Left: gemma/qwen on Ollama emitting broken tool-call JSON, agent stuck in
-     an "Invalid tool parameters" retry loop. Right: same model through
-     toolrails, every call well-formed on the first try. -->
+     Left: llama3.2:3b on Ollama handing back a tool call with stringified
+     arrays and an integer-as-string, agent stuck in an "Invalid tool
+     parameters" retry loop. Right: same model through toolrails, correct types
+     on the first try. Capture notes in demo/README.md. -->
 
 Local models are good enough to code with now — until they try to call a tool.
-A 7B model on Ollama will decide to call `read_file` and then hand your agent
-`{"path": "src/app.py",}` with a trailing comma, or wrap it in a ```` ```json ````
-fence, or invent a tool named `readFile`, or skip the arguments entirely. The
-agent can't parse it, retries, gets the same broken call, and burns your evening
-in a loop. (See [ollama/ollama#15390](https://github.com/ollama/ollama/issues/15390):
-Claude Code + a local model, stuck on *Invalid tool parameters*, unresolved.)
+A small model on Ollama will decide to call `read_file` and then hand your agent
+the arguments as a *string* instead of an object, or an array field serialized
+as `"[...]"`, or an integer wrapped in quotes, or invent a tool named
+`readFile`. The agent can't use it, retries, gets the same broken call, and
+burns your evening in a loop. (See
+[ollama/ollama#15390](https://github.com/ollama/ollama/issues/15390): Claude Code
++ a local model, stuck on *Invalid tool parameters*, unresolved.)
 
 toolrails is a small proxy that sits between your agent and Ollama and makes that
 stop. Your agent speaks the ordinary OpenAI API to it; toolrails guarantees the
@@ -29,6 +31,42 @@ uvx toolrails --ollama http://localhost:11434
 ```
 
 That's the whole change. One base URL.
+
+## The difference, measured
+
+A benchmark ships in the repo (`demo/reliability.py`): the same tool-calling
+request, twelve times, against raw Ollama and through toolrails, using a
+realistically complex tool — typed fields and a nested array of objects, the way
+a real coding agent's tools actually look.
+
+| endpoint | model | valid tool calls |
+| --- | --- | --- |
+| raw Ollama | llama3.2:3b | **0 / 12** |
+| via toolrails | llama3.2:3b | **12 / 12** |
+
+The model isn't stupid — it gets the *values* right and the *types* wrong. Raw,
+it hands your agent this (note the integer-as-string and the two stringified
+arrays):
+
+```json
+{"duration_minutes": "30",
+ "attendees": "[\"alice@example.com\", \"bob@example.com\"]",
+ "reminders": "[{\"method\": \"email\", \"minutes_before\": 10}]"}
+```
+
+`attendees` is a string, not a list — your agent can't iterate it, so the call
+fails and the retry loop begins. Through toolrails, the same request and the same
+model:
+
+```json
+{"duration_minutes": 30,
+ "attendees": ["alice@example.com", "bob@example.com"],
+ "reminders": [{"method": "email", "minutes_before": 10}]}
+```
+
+Correct types, real nested arrays, every time. Simpler flat tools fail far less
+often raw — the gap is widest exactly where real agent tools live: structured,
+typed, nested.
 
 ## What it guarantees
 
@@ -90,7 +128,10 @@ toolrails fixes the *shape* of tool calls: valid name, valid arguments, working
 call the model didn't attempt, or route between models. If the model decides not
 to call a tool, that decision stands (unless you set `tool_choice: required`).
 It is a proxy over Ollama specifically, because the leverage is Ollama's
-grammar-constrained `format` — the same primitive the guarantee is built on.
+grammar-constrained `format` — the same primitive the guarantee is built on. It
+repairs models that *attempt* tool calls; a model Ollama rejects outright with
+*"does not support tools"* (some chat templates have none) is out of scope for
+v1 — forcing tool calls onto those is a bigger, separate job.
 
 Streaming requests are supported: with tools, the response is repaired and then
 re-emitted as a stream. Token-by-token streaming under the grammar is a later

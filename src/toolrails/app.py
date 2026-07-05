@@ -99,8 +99,12 @@ async def _forward(up: Upstream, body: dict[str, Any], wants_stream: bool) -> Re
                 async for chunk in r.aiter_raw():
                     yield chunk
         return StreamingResponse(gen(), media_type="text/event-stream")
-    result = await up.chat_openai(body)
-    return JSONResponse(result)
+    r = await up.chat_raw(body)
+    return Response(
+        r.content,
+        status_code=r.status_code,
+        media_type=r.headers.get("content-type", "application/json"),
+    )
 
 
 def _as_sse(result: dict[str, Any]):

@@ -6,8 +6,10 @@ getting it right on the first try. Capture it two ways, best first.
 
 ## 1. Real in-session (best, most credible)
 
-1. Pull a small, tool-flaky model: `ollama pull gemma3:4b` (or any 3–7B model
-   that's shaky at tool calls).
+1. Pull a small, tool-flaky model: `ollama pull llama3.2:3b` (a good demo model —
+   it supports tools but mangles types on nested schemas). Note gemma3 won't
+   work here: Ollama reports it *does not support tools* at all, which is a
+   different problem toolrails v1 doesn't address.
 2. Point a coding agent (Cline, opencode, or Claude Code with a local base URL)
    straight at Ollama. Drive it until it hits the *Invalid tool parameters*
    loop — a task that needs a tool call usually does it within a turn or two.

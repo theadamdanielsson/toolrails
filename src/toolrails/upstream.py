@@ -32,12 +32,26 @@ class Upstream:
         await self._client.aclose()
 
     async def chat_openai(self, body: dict[str, Any]) -> dict[str, Any]:
-        """Stage one: unconstrained OpenAI-compatible chat completion."""
+        """Stage one: unconstrained OpenAI-compatible chat completion.
+
+        Raises on a non-2xx status so the pipeline's fail-open guard trips and
+        the caller gets Ollama's own response (see `chat_raw`) instead of a
+        half-repaired one.
+        """
         r = await self._client.post(
             f"{self.base_url}/v1/chat/completions", json=body
         )
         r.raise_for_status()
         return r.json()
+
+    async def chat_raw(self, body: dict[str, Any]) -> httpx.Response:
+        """Forward a chat request and hand back Ollama's response verbatim,
+        status and all. Used for pass-through and as the fail-open path, so an
+        upstream 400 (e.g. a model that doesn't support tools) reaches the
+        client as a 400 rather than being masked as a proxy 500."""
+        return await self._client.post(
+            f"{self.base_url}/v1/chat/completions", json=body
+        )
 
     async def constrained_object(
         self,
