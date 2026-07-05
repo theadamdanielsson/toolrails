@@ -192,10 +192,9 @@ benchmark against your own models.
 
 ## From the same author
 
-toolrails is by the author of [overloop](https://pypi.org/project/overloop/)
-(*stop your agent looping*) and [overllm](https://github.com/theadamdanielsson/overllm)
-(*catch the LLM calls you didn't need*). Same theme, one layer down: those stop
-wasted agent work; this stops the wasted work of a tool call that never parses.
+toolrails is by the author of [overllm](https://github.com/theadamdanielsson/overllm)
+(*catch the LLM calls you didn't need*). Same theme, one layer down: that catches
+wasted AI calls in your code; this catches the wasted work of a tool call that never parses.
 
 ## License
 
